@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Book Voice</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Devanagari:wght@400;600&family=Inter:wght@400;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<style>
+:root{--bg:#f6f3ee;--card:#fff;--ink:#1d1b18;--mute:#6b665e;--line:#e3ddd2;--acc:#b5532a;--acc-ink:#fff}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#161412;--card:#201d1a;--ink:#efe9df;--mute:#a39b8f;--line:#38322c;--acc:#e07a4a;--acc-ink:#161412}}
+:root[data-theme="dark"]{--bg:#161412;--card:#201d1a;--ink:#efe9df;--mute:#a39b8f;--line:#38322c;--acc:#e07a4a;--acc-ink:#161412}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 Inter,"Noto Sans Devanagari",system-ui,sans-serif}
+main{max-width:860px;margin:0 auto;padding:24px 16px 120px}
+h1{font-size:1.6rem;margin:0 0 4px}
+p.sub{color:var(--mute);margin:0 0 20px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:16px}
+label{font-size:.85rem;color:var(--mute);display:block;margin-bottom:4px}
+input,select,textarea,button{font:inherit;color:inherit}
+input[type=password],input:not([type]),select,textarea{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:10px}
+textarea{min-height:280px;resize:vertical;font-family:"Noto Sans Devanagari",Inter,sans-serif;font-size:1.05rem;line-height:1.8}
+.row{display:flex;gap:12px;flex-wrap:wrap;align-items:end}
+.row>*{flex:1 1 160px}
+button{background:var(--acc);color:var(--acc-ink);border:0;border-radius:10px;padding:10px 16px;cursor:pointer;font-weight:600}
+button.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
+button:disabled{opacity:.45;cursor:default}
+.drop{border:2px dashed var(--line);border-radius:14px;padding:28px;text-align:center;color:var(--mute);cursor:pointer}
+.drop.on{border-color:var(--acc)}
+#status{color:var(--mute);font-size:.9rem;min-height:1.4em}
+.bar{position:fixed;left:0;right:0;bottom:0;background:var(--card);border-top:1px solid var(--line);padding:10px 16px}
+.bar .in{max-width:860px;margin:0 auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+#pageLbl{min-width:90px;text-align:center;font-weight:600}
+#thumb{max-width:100%;border-radius:10px;border:1px solid var(--line);display:none;margin-bottom:12px}
+details summary{cursor:pointer;color:var(--mute)}
+</style>
+</head>
+<body>
+<main>
+  <h1>Book Voice</h1>
+  <p class="sub">Upload a PDF, photos of pages, or a text file. It reads one page at a time, in English, Hindi and Sanskrit.</p>
+
+  <div class="card">
+    <div class="row">
+      <div><label for="key">Gemini API key (saved only in this browser)</label><input id="key" type="password" placeholder="AIza..."></div>
+      <div><label for="voice">Voice</label><select id="voice"></select></div>
+      <div><label for="speed">Speed</label><select id="speed"><option>0.8</option><option>0.9</option><option selected>1</option><option>1.1</option><option>1.25</option></select></div>
+    </div>
+    <details style="margin-top:10px"><summary>Models (advanced)</summary>
+      <div class="row" style="margin-top:8px">
+        <div><label for="ocrModel">Page-reading model</label><input id="ocrModel" value="gemini-3.8-flash"></div>
+        <div><label for="ttsModel">Voice model</label><input id="ttsModel" value="gemini-3.8-flash-tts"></div>
+      </div>
+    </details>
+  </div>
+
+  <div class="card">
+    <div id="drop" class="drop" tabindex="0" role="button">Tap or drop a PDF / images / .txt here
+      <input id="file" type="file" accept=".pdf,image/*,.txt" multiple hidden></div>
+  </div>
+
+  <div class="card">
+    <img id="thumb" alt="Current page">
+    <label for="text">Page text (you can fix mistakes before it speaks)</label>
+    <textarea id="text" placeholder="Page text will appear here…"></textarea>
+    <div id="status" aria-live="polite"></div>
+  </div>
+</main>
+
+<div class="bar"><div class="in">
+  <button class="ghost" id="prev" aria-label="Previous page">◀</button>
+  <span id="pageLbl">–</span>
+  <button class="ghost" id="next" aria-label="Next page">▶</button>
+  <button id="play">▶ Read page</button>
+  <button class="ghost" id="stop">■ Stop</button>
+  <label style="display:flex;gap:6px;align-items:center;margin:0"><input type="checkbox" id="auto" checked> Auto next page</label>
+</div></div>
+
+<script>
+pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+const $ = id => document.getElementById(id);
+const API = "https://generativelanguage.googleapis.com/v1beta";
+const VOICES = ["Kore","Charon","Aoede","Puck","Leda","Orus","Fenrir","Zephyr","Despina","Sulafat","Achird","Gacrux","Schedar","Iapetus","Umbriel","Algieba","Erinome","Rasalgethi","Laomedeia","Achernar","Alnilam","Pulcherrima","Vindemiatrix","Sadachbia","Sadaltager","Zubenelgenubi","Callirrhoe","Autonoe","Enceladus","Algenib"];
+const OCR_PROMPT = `You are reading one page of a book (often astrology / jyotish) aloud.
+Write out ALL the text on this page in natural reading order (follow columns correctly).
+Rules:
+- Keep each language in its ORIGINAL script: English in Latin, Hindi and Sanskrit in Devanagari. Never translate or transliterate.
+- Copy Sanskrit shlokas exactly, with every matra, visarga (ः), anusvara (ं), halant (्) and danda (। ॥). Put each shloka line on its own line.
+- Skip page numbers, running headers/footers, and decorative marks.
+- Read tables row by row as plain sentences.
+- For a horoscope/kundli chart or diagram, write one short line describing it, in the page's main language.
+- Output ONLY the page text, nothing else. If the page is blank, output nothing.`;
+const STYLE = "Calm, clear audiobook narration at a steady pace. Pronounce Sanskrit shlokas in proper Sanskrit, slowly and rhythmically, fully voicing visarga and anusvara; read Hindi in natural standard Hindi and English in Indian English.";
+
+const store = (k, v) => { try { v === undefined ? v = localStorage.getItem(k) : localStorage.setItem(k, v) } catch {} return v };
+for (const id of ["key","voice","speed","ocrModel","ttsModel"]) {
+  if (id === "voice") $("voice").innerHTML = VOICES.map(v => `<option>${v}</option>`).join("");
+  const saved = store("bv_" + id); if (saved) $(id).value = saved;
+  $(id).addEventListener("change", () => store("bv_" + id, $(id).value));
+}
+
+// pages: [{kind:"pdf"|"img"|"text", get: async()=>{image?, mime?, text?}}]
+let pages = [], cur = 0, textCache = {}, audioCache = {}, playing = null, runId = 0;
+const status = s => $("status").textContent = s;
+
+async function call(url, body) {
+  const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", "x-goog-api-key": $("key").value.trim() }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((Array.isArray(j) ? j[0] : j)?.error?.message || ("HTTP " + r.status));
+  return j;
+}
+
+const b64 = blob => new Promise(res => { const fr = new FileReader(); fr.onload = () => res(fr.result.split(",")[1]); fr.readAsDataURL(blob); });
+
+async function loadFiles(files) {
+  pages = []; textCache = {}; audioCache = {}; stop();
+  for (const f of files) {
+    if (f.type === "application/pdf" || f.name.toLowerCase().endsWith(".pdf")) {
+      const pdf = await pdfjsLib.getDocument({ data: await f.arrayBuffer() }).promise;
+      for (let i = 1; i <= pdf.numPages; i++) pages.push({ get: async () => {
+        const pg = await pdf.getPage(i), vp = pg.getViewport({ scale: 2 });
+        const c = Object.assign(document.createElement("canvas"), { width: vp.width, height: vp.height });
+        await pg.render({ canvasContext: c.getContext("2d"), viewport: vp }).promise;
+        // ponytail: also tries the PDF's embedded text layer would be cheaper, but old scanned books have none and Devanagari text layers are often garbled
+        const blob = await new Promise(r => c.toBlob(r, "image/jpeg", 0.85));
+        return { image: blob, mime: "image/jpeg" };
+      }});
+    } else if (f.type.startsWith("image/")) {
+      pages.push({ get: async () => ({ image: f, mime: f.type }) });
+    } else {
+      // text file: split into ~1500-char pages on paragraph boundaries
+      const t = await f.text(); let buf = "";
+      for (const para of t.split(/\n\s*\n/)) {
+        if (buf && buf.length + para.length > 1500) { const s = buf; pages.push({ get: async () => ({ text: s }) }); buf = ""; }
+        buf += (buf ? "\n\n" : "") + para;
+      }
+      if (buf.trim()) { const s = buf; pages.push({ get: async () => ({ text: s }) }); }
+    }
+  }
+  cur = 0; show();
+}
+
+async function pageText(i) {
+  if (textCache[i] !== undefined) return textCache[i];
+  return textCache[i] = (async () => {
+    const p = await pages[i].get();
+    if (p.text !== undefined) return p.text;
+    const j = await call(`${API}/models/${$("ocrModel").value.trim()}:generateContent`, {
+      contents: [{ parts: [{ inline_data: { mime_type: p.mime, data: await b64(p.image) } }, { text: OCR_PROMPT }] }]
+    });
+    return (j.candidates?.[0]?.content?.parts || []).map(x => x.text || "").join("").trim();
+  })().catch(e => { delete textCache[i]; throw e; });
+}
+
+// split text into chunks so the first audio starts fast and no request is too long
+function chunks(t) {
+  const out = []; let buf = "";
+  for (const line of t.split(/(?<=[\n।॥.?!])\s*/)) {
+    if (buf && buf.length + line.length > 900) { out.push(buf); buf = ""; }
+    buf += (buf ? " " : "") + line;
+  }
+  if (buf.trim()) out.push(buf);
+  return out;
+}
+
+function findAudio(o) {
+  if (!o || typeof o !== "object") return null;
+  if (o.type === "audio" && o.data) return o;
+  if (o.inlineData?.data) return { data: o.inlineData.data, mime_type: o.inlineData.mimeType };
+  let last = null;
+  for (const v of Object.values(o)) { const a = findAudio(v); if (a) last = a; }
+  return last;
+}
+
+function toWavUrl(data) {
+  const bytes = Uint8Array.from(atob(data), c => c.charCodeAt(0));
+  if (String.fromCharCode(...bytes.slice(0, 4)) === "RIFF") return URL.createObjectURL(new Blob([bytes], { type: "audio/wav" }));
+  // raw 24 kHz mono 16-bit PCM: add a WAV header
+  const h = new DataView(new ArrayBuffer(44)), w = (o, s) => [...s].forEach((c, i) => h.setUint8(o + i, c.charCodeAt(0)));
+  w(0, "RIFF"); h.setUint32(4, 36 + bytes.length, true); w(8, "WAVEfmt "); h.setUint32(16, 16, true);
+  h.setUint16(20, 1, true); h.setUint16(22, 1, true); h.setUint32(24, 24000, true); h.setUint32(28, 48000, true);
+  h.setUint16(32, 2, true); h.setUint16(34, 16, true); w(36, "data"); h.setUint32(40, bytes.length, true);
+  return URL.createObjectURL(new Blob([h, bytes], { type: "audio/wav" }));
+}
+
+function speak(text) {
+  const key = $("voice").value + "|" + text;
+  return audioCache[key] ??= call(`${API}/interactions`, {
+    model: $("ttsModel").value.trim(),
+    input: [{ type: "user_input", content: [{ type: "text", text, annotations: [{ type: "speech_metadata", style: STYLE }] }] }],
+    response_format: { type: "audio" },
+    generation_config: { speech_config: [{ voice: $("voice").value }] }
+  }).then(j => { const a = findAudio(j); if (!a) throw new Error("No audio in reply"); return toWavUrl(a.data); })
+    .catch(e => { delete audioCache[key]; throw e; });
+}
+
+async function show() {
+  $("pageLbl").textContent = pages.length ? `${cur + 1} / ${pages.length}` : "–";
+  $("prev").disabled = cur <= 0; $("next").disabled = cur >= pages.length - 1;
+  $("text").value = ""; $("thumb").style.display = "none";
+  if (!pages.length) return;
+  const i = cur, p = await pages[i].get();
+  if (i !== cur) return;
+  if (p.image) { $("thumb").src = URL.createObjectURL(p.image); $("thumb").style.display = "block"; }
+  if (textCache[i] !== undefined) $("text").value = await textCache[i].catch(() => "");
+}
+
+async function readFrom(i) {
+  if (!$("key").value.trim()) { status("Paste your Gemini API key first."); $("key").focus(); return; }
+  const id = ++runId;
+  while (i < pages.length && id === runId) {
+    cur = i; await show();
+    status(`Reading page ${i + 1}…`);
+    let text;
+    try { text = await pageText(i); } catch (e) { status("Page reading failed: " + e.message); return; }
+    if (id !== runId) return;
+    $("text").value = text; // edits made in the box are saved to textCache on input
+    if (i + 1 < pages.length) pageText(i + 1).catch(() => {}); // prefetch next page
+    const parts = chunks(text);
+    for (let k = 0; k < parts.length && id === runId; k++) {
+      status(`Page ${i + 1}: part ${k + 1} of ${parts.length}`);
+      let url;
+      try { url = await speak(parts[k]); } catch (e) { status("Voice failed: " + e.message); return; }
+      if (k + 1 < parts.length) speak(parts[k + 1]).catch(() => {});
+      if (id !== runId) return;
+      await new Promise(res => {
+        playing = new Audio(url); playing.playbackRate = +$("speed").value;
+        playing.onended = playing.onerror = res; playing.play().catch(res);
+      });
+    }
+    if (id !== runId) return;
+    status(`Finished page ${i + 1}.`);
+    if (!$("auto").checked) return;
+    i++;
+  }
+}
+
+function stop() { runId++; if (playing) { playing.pause(); playing = null; } status("Stopped."); }
+
+$("drop").onclick = () => $("file").click();
+$("drop").onkeydown = e => (e.key === "Enter" || e.key === " ") && $("file").click();
+$("file").onchange = e => loadFiles([...e.target.files]);
+$("drop").ondragover = e => { e.preventDefault(); $("drop").classList.add("on"); };
+$("drop").ondragleave = () => $("drop").classList.remove("on");
+$("drop").ondrop = e => { e.preventDefault(); $("drop").classList.remove("on"); loadFiles([...e.dataTransfer.files]); };
+$("prev").onclick = () => { stop(); cur--; show(); };
+$("next").onclick = () => { stop(); cur++; show(); };
+$("play").onclick = () => { if (!pages.length) { const t = $("text").value.trim(); if (!t) return status("Upload a file or type some text."); pages = [{ get: async () => ({ text: t }) }]; cur = 0; } readFrom(cur); };
+$("stop").onclick = stop;
+$("speed").addEventListener("change", () => playing && (playing.playbackRate = +$("speed").value));
+$("text").addEventListener("input", () => { textCache[cur] = Promise.resolve($("text").value); });
+</script>
+</body>
+</html>
