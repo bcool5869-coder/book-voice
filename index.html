@@ -61,6 +61,11 @@ details summary{cursor:pointer;color:var(--mute)}
       <div><label for="orKey">OpenRouter key (optional, used for scanning pages)</label><div style="display:flex;gap:6px"><input id="orKey" type="password" autocomplete="new-password" placeholder="sk-or-..."><button class="ghost" data-forget="orKey" aria-label="Forget OpenRouter key">✕</button></div></div>
       <div><label for="orModel">OpenRouter scan model</label><select id="orModel">
         <option value="google/gemma-4-31b-it:free">Gemma 4 31B by Google (free)</option>
+        <option value="thinkingmachines/inkling:free">Inkling by Thinking Machines (free)</option>
+        <option value="google/gemma-4-26b-a4b-it:free">Gemma 4 26B by Google (free)</option>
+        <option value="dots-studio/dots-3-note-preview:free">Dots3-Note (free)</option>
+        <option value="thinkingmachines/inkling-small:free">Inkling Small (free)</option>
+        <option value="nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free">Nemotron 3 Nano Omni by NVIDIA (free)</option>
         <option value="google/gemini-3.8-flash">Gemini 3.8 Flash (best, uses credit)</option>
       </select></div>
     </div>
@@ -139,13 +144,13 @@ let pages = [], cur = 0, textCache = {}, audioCache = {}, playing = null, runId 
 const status = s => $("status").textContent = s;
 
 // retries busy/overloaded errors (429, 5xx) with growing waits: 3s, 8s, 15s
-async function call(url, body, auth = { "x-goog-api-key": $("key").value.trim() }) {
+async function call(url, body, auth = { "x-goog-api-key": $("key").value.trim() }, retries = 3) {
   for (let attempt = 0; ; attempt++) {
     const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", ...auth }, body: JSON.stringify(body) });
     const j = await r.json().catch(() => ({}));
     if (r.ok) return j;
     const err = new Error((Array.isArray(j) ? j[0] : j)?.error?.message || ("HTTP " + r.status));
-    if (!(r.status === 429 || r.status >= 500) || attempt >= 3) throw err;
+    if (!(r.status === 429 || r.status >= 500) || attempt >= retries) throw err;
     const wait = [3, 8, 15][attempt];
     status(`Server is busy, retrying in ${wait}s…`);
     await new Promise(res => setTimeout(res, wait * 1000));
@@ -190,13 +195,13 @@ async function pageText(i) {
     const orKey = $("orKey").value.trim();
     if (orKey) {
       // OpenRouter: chosen model first, then two free Google models as backups (free servers often time out)
-      const models = [...new Set([$("orModel").value, "google/gemma-4-31b-it:free", "google/gemma-4-26b-a4b-it:free"])];
+      const models = [...new Set([$("orModel").value, ...[...$("orModel").options].map(o => o.value).filter(v => v.endsWith(":free"))])];
       const body = { messages: [{ role: "user", content: [
         { type: "image_url", image_url: { url: `data:${p.mime};base64,${await b64(p.image)}` } },
         { type: "text", text: OCR_PROMPT }] }] };
       for (const [n, m] of models.entries()) {
         try {
-          const j = await call("https://openrouter.ai/api/v1/chat/completions", { ...body, model: m }, { Authorization: "Bearer " + orKey });
+          const j = await call("https://openrouter.ai/api/v1/chat/completions", { ...body, model: m }, { Authorization: "Bearer " + orKey }, 1);
           return (j.choices?.[0]?.message?.content || "").trim();
         } catch (e) {
           if (n < models.length - 1) { status(`${m} failed, trying ${models[n + 1]}…`); continue; }
