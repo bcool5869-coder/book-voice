@@ -456,7 +456,7 @@ async function show() {
 }
 
 async function readFrom(i) {
-  const need = { gemini: "key", vagdhenu: null, parler: null }[$("engine").value] ?? "orKey";
+  const e = $("engine").value, need = e === "gemini" ? "key" : e === "vagdhenu" || e === "parler" ? null : "orKey";
   if (need && !$(need).value.trim()) { status(need === "key" ? "Paste your Gemini API key first." : "Paste your OpenRouter key first."); $(need).focus(); return; }
   const id = ++runId;
   while (i < pages.length && id === runId) {
