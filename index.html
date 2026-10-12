@@ -51,6 +51,8 @@ details summary{cursor:pointer;color:var(--mute)}
         <option value="gemini">Gemini TTS (Gemini key)</option>
         <option value="openai/gpt-audio">GPT Audio (OpenRouter key)</option>
         <option value="openai/gpt-audio-mini">GPT Audio Mini, cheapest (OpenRouter key)</option>
+        <option value="vagdhenu">Vāgdhenu: Sanskrit chant, in browser, free (~290 MB once)</option>
+        <option value="parler">Indic Parler-TTS: in browser, free (~950 MB once, PC only)</option>
       </select></div>
       <div><label for="voice">Voice</label><select id="voice"></select></div>
       <div><label for="speed">Speed</label><select id="speed"><option>0.8</option><option>0.9</option><option selected>1</option><option>1.1</option><option>1.25</option></select></div>
@@ -58,8 +60,8 @@ details summary{cursor:pointer;color:var(--mute)}
     <div class="row" style="margin-top:10px">
       <div><label for="orKey">OpenRouter key (optional, used for scanning pages)</label><input id="orKey" type="password" placeholder="sk-or-..."></div>
       <div><label for="orModel">OpenRouter scan model</label><select id="orModel">
+        <option value="google/gemma-4-31b-it:free">Gemma 4 31B by Google (free)</option>
         <option value="google/gemini-3.8-flash">Gemini 3.8 Flash (best, uses credit)</option>
-        <option value="google/gemma-4-31b-it:free">Gemma 4 31B (free)</option>
       </select></div>
     </div>
     <details style="margin-top:10px"><summary>Models (advanced)</summary>
@@ -117,7 +119,10 @@ const STYLE = "Calm, clear audiobook narration at a steady pace. Pronounce Sansk
 const store = (k, v) => { try { v === undefined ? v = localStorage.getItem(k) : localStorage.setItem(k, v) } catch {} return v };
 const OR_VOICES = ["marin","cedar","coral","sage","shimmer","alloy","ash","ballad","echo","verse"];
 const OR_TTS_PROMPT = "You are a text-to-speech reader, not a chat assistant. Speak the user's message aloud EXACTLY as written, word for word, in its original languages. Never add, skip, translate, explain, greet or reply. " + STYLE;
-const fillVoices = () => $("voice").innerHTML = ($("engine").value === "gemini" ? VOICES : OR_VOICES).map(v => `<option>${v}</option>`).join("");
+// Indic Parler speakers recommended by AI4Bharat for each language
+const ENGINE_VOICES = { gemini: VOICES, vagdhenu: ["Chant (metre detected automatically)"],
+  parler: ["Divya (Hindi)", "Rohit (Hindi)", "Aman (Hindi)", "Rani (Hindi)", "Aryan (Sanskrit)", "Thoma (English)", "Mary (English)"] };
+const fillVoices = () => $("voice").innerHTML = (ENGINE_VOICES[$("engine").value] || OR_VOICES).map(v => `<option>${v}</option>`).join("");
 $("engine").addEventListener("change", () => { fillVoices(); store("bv_voice", $("voice").value); });
 for (const id of ["key","engine","voice","speed","ocrModel","ttsModel","orKey","orModel"]) {
   if (id === "voice") fillVoices();
@@ -190,8 +195,9 @@ async function pageText(i) {
           const j = await call("https://openrouter.ai/api/v1/chat/completions", { ...body, model: m }, { Authorization: "Bearer " + orKey });
           return (j.choices?.[0]?.message?.content || "").trim();
         } catch (e) {
-          if (n === models.length - 1) throw e;
-          status(`${m} failed, trying ${models[n + 1]}…`);
+          if (n < models.length - 1) { status(`${m} failed, trying ${models[n + 1]}…`); continue; }
+          if (!$("key").value.trim()) throw e;
+          status("OpenRouter failed, scanning with Gemini instead…"); // falls through to the Gemini path below
         }
       }
     }
@@ -211,10 +217,10 @@ async function pageText(i) {
 }
 
 // split text into chunks so the first audio starts fast and no request is too long
-function chunks(t) {
+function chunks(t, max = 900) {
   const out = []; let buf = "";
   for (const line of t.split(/(?<=[\n।॥.?!])\s*/)) {
-    if (buf && buf.length + line.length > 900) { out.push(buf); buf = ""; }
+    if (buf && buf.length + line.length > max) { out.push(buf); buf = ""; }
     buf += (buf ? " " : "") + line;
   }
   if (buf.trim()) out.push(buf);
@@ -230,23 +236,23 @@ function findAudio(o) {
   return last;
 }
 
-function toWavUrl(data) {
+function toWavUrl(data, rate = 24000) {
   const bytes = typeof data === "string" ? Uint8Array.from(atob(data), c => c.charCodeAt(0)) : data;
   if (String.fromCharCode(...bytes.slice(0, 4)) === "RIFF") return URL.createObjectURL(new Blob([bytes], { type: "audio/wav" }));
-  // raw 24 kHz mono 16-bit PCM: add a WAV header
+  // raw mono 16-bit PCM: add a WAV header
   const h = new DataView(new ArrayBuffer(44)), w = (o, s) => [...s].forEach((c, i) => h.setUint8(o + i, c.charCodeAt(0)));
   w(0, "RIFF"); h.setUint32(4, 36 + bytes.length, true); w(8, "WAVEfmt "); h.setUint32(16, 16, true);
-  h.setUint16(20, 1, true); h.setUint16(22, 1, true); h.setUint32(24, 24000, true); h.setUint32(28, 48000, true);
+  h.setUint16(20, 1, true); h.setUint16(22, 1, true); h.setUint32(24, rate, true); h.setUint32(28, rate * 2, true);
   h.setUint16(32, 2, true); h.setUint16(34, 16, true); w(36, "data"); h.setUint32(40, bytes.length, true);
   return URL.createObjectURL(new Blob([h, bytes], { type: "audio/wav" }));
 }
 
 // OpenRouter audio only comes as a stream: collect the base64 pcm16 (24 kHz mono) chunks
 // ponytail: no busy-retry here (unlike call()); add one if OpenRouter voice errors show up often
-async function orSpeak(text) {
+async function orSpeak(text, model, voice) {
   const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + $("orKey").value.trim() },
-    body: JSON.stringify({ model: $("engine").value, modalities: ["text", "audio"], audio: { voice: $("voice").value, format: "pcm16" }, stream: true,
+    body: JSON.stringify({ model, modalities: ["text", "audio"], audio: { voice, format: "pcm16" }, stream: true,
       messages: [{ role: "system", content: OR_TTS_PROMPT }, { role: "user", content: text }] })
   });
   if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.error?.message || ("HTTP " + r.status)); }
@@ -267,16 +273,175 @@ async function orSpeak(text) {
   return toWavUrl(all);
 }
 
+// Resolves to an audio URL, or null when this part has no voice to read it (it is then skipped).
 function speak(text) {
-  const key = $("engine").value + "|" + $("voice").value + "|" + text;
-  if ($("engine").value !== "gemini") return audioCache[key] ??= orSpeak(text).catch(e => { delete audioCache[key]; throw e; });
-  return audioCache[key] ??= call(`${API}/interactions`, {
-    model: $("ttsModel").value.trim(),
-    input: [{ type: "user_input", content: [{ type: "text", text, annotations: [{ type: "speech_metadata", style: STYLE }] }] }],
-    response_format: { type: "audio" },
-    generation_config: { speech_config: [{ voice: $("voice").value }] }
-  }).then(j => { const a = findAudio(j); if (!a) throw new Error("No audio in reply"); return toWavUrl(a.data); })
-    .catch(e => { delete audioCache[key]; throw e; });
+  let engine = $("engine").value, voice = $("voice").value;
+  if (engine === "vagdhenu" && !text.split("\n").every(isSanskrit)) {
+    // Vāgdhenu only knows Sanskrit: hand Hindi/English lines to a key-based voice if there is one
+    if ($("key").value.trim()) [engine, voice] = ["gemini", "Kore"];
+    else if ($("orKey").value.trim()) [engine, voice] = ["openai/gpt-audio-mini", "marin"];
+    else return Promise.resolve(null);
+  }
+  const key = engine + "|" + voice + "|" + text;
+  const job = engine === "vagdhenu" ? serial(() => vagSpeak(text))
+    : engine === "parler" ? serial(() => parlerSpeak(text, voice.split(" ")[0]))
+    : engine !== "gemini" ? orSpeak(text, engine, voice)
+    : call(`${API}/interactions`, {
+        model: $("ttsModel").value.trim(),
+        input: [{ type: "user_input", content: [{ type: "text", text, annotations: [{ type: "speech_metadata", style: STYLE }] }] }],
+        response_format: { type: "audio" },
+        generation_config: { speech_config: [{ voice }] }
+      }).then(j => { const a = findAudio(j); if (!a) throw new Error("No audio in reply"); return toWavUrl(a.data); });
+  return audioCache[key] ??= job.catch(e => { delete audioCache[key]; throw e; });
+}
+
+// Text → parts. Parler works best one sentence at a time; Vāgdhenu gets one verse (up to ॥) at a time.
+function partsFor(text) {
+  const engine = $("engine").value;
+  if (engine === "parler") return chunks(text, 200);
+  if (engine !== "vagdhenu") return chunks(text);
+  const out = []; let buf = "", sa = null;
+  for (const line of text.split("\n").filter(l => l.trim())) {
+    const s = isSanskrit(line);
+    if (buf && s !== sa) { out.push(...(sa ? [buf] : chunks(buf))); buf = ""; }
+    buf += (buf ? "\n" : "") + line; sa = s;
+    if (s && line.includes("॥")) { out.push(buf); buf = ""; }
+  }
+  if (buf) out.push(...(sa ? [buf] : chunks(buf)));
+  return out;
+}
+
+// A Devanagari line with no common Hindi function words is treated as Sanskrit.
+// ponytail: word-list guess; can misjudge very short lines. Upgrade: have the scan model tag Sanskrit lines.
+const HINDI_WORDS = /(^|\s)(है|हैं|था|थे|थी|की|के|का|में|और|से|को|यह|वह|नहीं|होता|होती|होते|इस|उस|लिए|भी|पर|जो|तो|कि|ने|हो)(?=$|\s|[।,.?!])/;
+const isSanskrit = line => /[ऀ-ॿ]/.test(line) && !/[A-Za-z]/.test(line) && !HINDI_WORDS.test(line);
+
+// ---------- In-browser voices: no key, models download once and are cached by the browser ----------
+const ORT_URL = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.23.2/dist/ort.all.min.js"; // the version Vāgdhenu is built for
+const VAG_URL = "https://cdn.jsdelivr.net/gh/hemanth/sanskrit-tts-web@aedd58f6f96d13b24b4899dc4faec0bcc8b53fdc/dist/index.mjs";
+const TF_URL = "https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0";
+const PARLER = "https://huggingface.co/naklitechie/indic-parler-tts-ONNX/resolve/main/";
+const DAC = "https://huggingface.co/onnx-community/dac_44khz-ONNX/resolve/main/onnx/decoder_model_fp16.onnx";
+let localQ = Promise.resolve(), genEpoch = 0, ortP, vagP, parlerP;
+// one local generation at a time: ONNX sessions can't run two calls at once
+const serial = fn => { const p = localQ.then(fn); localQ = p.catch(() => {}); return p; };
+const loadOrt = () => ortP ??= window.ort ? Promise.resolve(window.ort) : new Promise((res, rej) => {
+  const s = Object.assign(document.createElement("script"), { src: ORT_URL, onload: () => res(window.ort), onerror: () => rej(new Error("Could not load ONNX Runtime")) });
+  document.head.append(s);
+});
+
+async function fetchCached(url, label) {
+  const cache = await caches.open("book-voice-models").catch(() => null);
+  const hit = await cache?.match(url);
+  if (hit) return new Uint8Array(await hit.arrayBuffer());
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`${label}: download failed (HTTP ${r.status})`);
+  const total = +r.headers.get("content-length") || 0, reader = r.body.getReader(), parts = []; let got = 0;
+  for (;;) {
+    const { done, value } = await reader.read(); if (done) break;
+    parts.push(value); got += value.length;
+    status(`Downloading ${label}: ${Math.round(got / 1e6)}${total ? " / " + Math.round(total / 1e6) : ""} MB (one time only)`);
+  }
+  const blob = new Blob(parts);
+  await cache?.put(url, new Response(blob)).catch(() => {});
+  return new Uint8Array(await blob.arrayBuffer());
+}
+
+// Vāgdhenu (IISc / Hemanth HM): Sanskrit śloka chanting, metre-aware. Downloads and caches its own models.
+const vagVoice = () => vagP ??= (async () => {
+  await loadOrt();
+  const { default: sanskritTts } = await import(VAG_URL);
+  return sanskritTts({ onProgress: s => status("Sanskrit voice: " + (s?.message || "loading…")) });
+})().catch(e => { vagP = null; throw e; });
+async function vagSpeak(text) {
+  const epoch = genEpoch, v = await vagVoice();
+  if (epoch !== genEpoch) throw new Error("stopped");
+  return (await v.chant(text)).url;
+}
+
+// Indic Parler-TTS (AI4Bharat), ONNX export by naklitechie, run with WebGPU.
+const parlerModel = () => parlerP ??= (async () => {
+  if (!navigator.gpu) throw new Error("Indic Parler needs WebGPU (Chrome or Edge on a PC)");
+  const ort = await loadOrt();
+  const { AutoTokenizer } = await import(TF_URL);
+  // keep the KV cache on the GPU between steps instead of copying hundreds of MB back each token
+  const opt = { executionProviders: ["webgpu"], preferredOutputLocation: "gpu-buffer" };
+  const sess = async (name, n) => ort.InferenceSession.create(await fetchCached(PARLER + name + ".onnx", `voice model ${n}/4`),
+    { ...opt, externalData: [{ path: name + ".onnx.data", data: await fetchCached(PARLER + name + ".onnx.data", `voice model ${n}/4`) }] });
+  const promptTok = await AutoTokenizer.from_pretrained("naklitechie/indic-parler-tts-ONNX");
+  const descTok = await AutoTokenizer.from_pretrained("google/flan-t5-large"); // the description goes through flan-T5, like AI4Bharat's own example
+  const enc = await sess("text_encoder_q4f16", 1), dec0 = await sess("decoder_model_q4f16", 2), dec = await sess("decoder_with_past_model_q4f16", 3);
+  const dac = await ort.InferenceSession.create(await fetchCached(DAC, "voice model 4/4"), { executionProviders: ["webgpu", "wasm"] });
+  return { ort, promptTok, descTok, enc, dec0, dec, dac };
+})().catch(e => { parlerP = null; throw e; });
+
+function sampleTopK(lg, off, n, k = 50) {
+  const idx = Array.from({ length: n }, (_, i) => i).sort((a, b) => lg[off + b] - lg[off + a]).slice(0, k);
+  const mx = lg[off + idx[0]], w = idx.map(i => Math.exp(lg[off + i] - mx));
+  let r = Math.random() * w.reduce((a, b) => a + b, 0);
+  for (let j = 0; j < k; j++) if ((r -= w[j]) <= 0) return idx[j];
+  return idx[0];
+}
+
+const f16 = h => { const s = h & 0x8000 ? -1 : 1, e = (h >> 10) & 31, f = h & 1023;
+  return e === 0 ? s * 2 ** -14 * (f / 1024) : e === 31 ? (f ? NaN : s * Infinity) : s * 2 ** (e - 15) * (1 + f / 1024); };
+
+// Port of parler_tts generate(): delay pattern + ParlerTTSLogitsProcessor + top-k 50 sampling, then DAC decode.
+async function parlerSpeak(text, speaker) {
+  const epoch = genEpoch, m = await parlerModel(), { ort } = m;
+  const T = (type, data, dims) => new ort.Tensor(type, data, dims), i64 = a => BigInt64Array.from(a, BigInt);
+  const ones = n => i64(Array(n).fill(1));
+  const desc = `${speaker}'s voice is clear and calm, speaking at a slow, steady pace. The recording is of very high quality, with the speaker's voice sounding clear and very close up, with no background noise.`;
+  const d = Array.from(m.descTok(desc).input_ids.data, Number), p = Array.from(m.promptTok(text).input_ids.data, Number);
+  const encMask = T("int64", ones(d.length), [1, d.length]);
+  const { last_hidden_state } = await m.enc.run({ input_ids: T("int64", i64(d), [1, d.length]), attention_mask: encMask });
+  const NC = 9, BOS = 1025, EOS = 1024, MAX = 2600; // MAX steps ≈ 30 s of audio (86 steps per second)
+  const codes = Array.from({ length: NC }, () => [BOS]), done = Array(NC).fill(false);
+  let fin = 0; // codebooks below fin have finished and are forced to EOS
+  let out = await m.dec0.run({ codec_input_ids: T("int64", i64(Array(NC).fill(BOS)), [1, NC, 1]),
+    prompt_input_ids: T("int64", i64(p), [1, p.length]), prompt_attention_mask: T("int64", ones(p.length), [1, p.length]),
+    encoder_hidden_states: last_hidden_state, encoder_attention_mask: encMask });
+  try {
+    for (let step = 1; step < MAX; step++) {
+      if (epoch !== genEpoch) throw new Error("stopped");
+      const [, L, V] = out.logits.dims, lg = await out.logits.getData();
+      if (fin < NC - 1 && done[fin]) fin++;
+      const next = codes.map((c, cb) => {
+        const tok = step <= cb ? BOS                      // delay pattern: codebook cb starts cb steps late
+          : cb < fin || done[cb] ? EOS                    // finished codebooks keep emitting EOS/PAD
+          : sampleTopK(lg, (cb * L + L - 1) * V, EOS + 1); // real codes 0–1023 plus EOS
+        c.push(tok); if (tok === EOS) done[cb] = true;
+        return tok;
+      });
+      if (done.every(Boolean)) break;
+      if (step % 43 === 0) status(`Making voice: ${(step / 86).toFixed(1)} s so far…`);
+      const feed = { codec_input_ids: T("int64", i64(next), [1, NC, 1]), encoder_attention_mask: encMask };
+      for (const [k, v] of Object.entries(out)) if (k.startsWith("present.")) feed["past_key_values." + k.slice(8)] = v;
+      const past = feed["past_key_values.0.decoder.key"].dims[2];
+      feed.attention_mask = T("int64", ones(past + 1), [1, past + 1]);
+      feed.cache_position = T("int64", i64([past]), [1]);
+      const prev = out; out = await m.dec.run(feed);
+      const keep = new Set(Object.values(out));
+      for (const t of Object.values(prev)) if (!keep.has(t)) t.dispose?.();
+    }
+  } finally { for (const t of Object.values(out)) t.dispose?.(); }
+  // undo the delay: frame t of codebook cb sits at position t + 1 + cb; drop frames holding EOS/PAD
+  const frames = [];
+  for (let t = 0; ; t++) {
+    const f = codes.map((c, cb) => c[t + 1 + cb]);
+    if (f.some(x => x === undefined)) break;
+    if (f.every(x => x < EOS)) frames.push(f);
+  }
+  if (!frames.length) throw new Error("Parler made no speech for this part");
+  const F = frames.length, flat = new BigInt64Array(NC * F);
+  frames.forEach((f, t) => f.forEach((x, cb) => flat[cb * F + t] = BigInt(x)));
+  const { audio_values } = await m.dac.run({ audio_codes: T("int64", flat, [1, NC, F]) });
+  const raw = await audio_values.getData(), pcm = new Int16Array(raw.length);
+  for (let i = 0; i < raw.length; i++) {
+    const v = audio_values.type === "float16" && !(raw instanceof Float32Array) ? f16(raw[i]) : raw[i];
+    pcm[i] = Math.max(-1, Math.min(1, v)) * 32767;
+  }
+  return toWavUrl(new Uint8Array(pcm.buffer), 44100);
 }
 
 async function show() {
@@ -291,8 +456,8 @@ async function show() {
 }
 
 async function readFrom(i) {
-  const need = $("engine").value === "gemini" ? "key" : "orKey";
-  if (!$(need).value.trim()) { status(need === "key" ? "Paste your Gemini API key first." : "Paste your OpenRouter key first."); $(need).focus(); return; }
+  const need = { gemini: "key", vagdhenu: null, parler: null }[$("engine").value] ?? "orKey";
+  if (need && !$(need).value.trim()) { status(need === "key" ? "Paste your Gemini API key first." : "Paste your OpenRouter key first."); $(need).focus(); return; }
   const id = ++runId;
   while (i < pages.length && id === runId) {
     cur = i; await show();
@@ -302,13 +467,14 @@ async function readFrom(i) {
     if (id !== runId) return;
     $("text").value = text; // edits made in the box are saved to textCache on input
     if (i + 1 < pages.length) pageText(i + 1).catch(() => {}); // prefetch next page
-    const parts = chunks(text);
+    const parts = partsFor(text);
     for (let k = 0; k < parts.length && id === runId; k++) {
       status(`Page ${i + 1}: part ${k + 1} of ${parts.length}`);
       let url;
-      try { url = await speak(parts[k]); } catch (e) { status("Voice failed: " + e.message); return; }
+      try { url = await speak(parts[k]); } catch (e) { if (id === runId) status("Voice failed: " + e.message); return; }
       if (k + 1 < parts.length) speak(parts[k + 1]).catch(() => {});
       if (id !== runId) return;
+      if (!url) { status(`Skipped a non-Sanskrit part (add a Gemini or OpenRouter key to hear it).`); continue; }
       await new Promise(res => {
         playing = new Audio(url); playing.playbackRate = +$("speed").value; $("pause").textContent = "⏸ Pause";
         karaoke(parts[k], playing);
@@ -322,7 +488,7 @@ async function readFrom(i) {
   }
 }
 
-function stop() { runId++; if (playing) { playing.pause(); playing = null; } $("reader").style.display = "none"; status("Stopped."); }
+function stop() { runId++; genEpoch++; if (playing) { playing.pause(); playing = null; } $("reader").style.display = "none"; status("Stopped."); }
 
 // Highlights the word being spoken. Gemini TTS gives no word timings, so this is an estimate:
 // position in the audio ≈ position in the text, weighted by word length.
