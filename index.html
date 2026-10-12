@@ -475,6 +475,7 @@ async function readFrom(i) {
       if (k + 1 < parts.length) speak(parts[k + 1]).catch(() => {});
       if (id !== runId) return;
       if (!url) { status(`Skipped a non-Sanskrit part (add a Gemini or OpenRouter key to hear it).`); continue; }
+      status(`Page ${i + 1}: reading part ${k + 1} of ${parts.length}`);
       await new Promise(res => {
         playing = new Audio(url); playing.playbackRate = +$("speed").value; $("pause").textContent = "⏸ Pause";
         karaoke(parts[k], playing);
