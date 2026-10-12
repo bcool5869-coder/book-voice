@@ -283,8 +283,7 @@ async function orSpeak(text, model, voice) {
 }
 
 // Resolves to an audio URL, or null when this part has no voice to read it (it is then skipped).
-function speak(text) {
-  let engine = $("engine").value, voice = $("voice").value;
+function speak(text, engine = $("engine").value, voice = $("voice").value) {
   if (engine === "vagdhenu" && !text.split("\n").every(isSanskrit)) {
     // Vāgdhenu only knows Sanskrit: hand Hindi/English lines to a key-based voice if there is one
     if ($("key").value.trim()) [engine, voice] = ["gemini", "Kore"];
@@ -480,7 +479,18 @@ async function readFrom(i) {
     for (let k = 0; k < parts.length && id === runId; k++) {
       status(`Page ${i + 1}: part ${k + 1} of ${parts.length}`);
       let url;
-      try { url = await speak(parts[k]); } catch (e) { if (id === runId) status("Voice failed: " + e.message); return; }
+      try { url = await speak(parts[k]); }
+      catch (e) {
+        // backup voices: any key-based engine you have a key for, other than the one that just failed
+        const backups = [["gemini", "Kore", "key"], ["openai/gpt-audio-mini", "marin", "orKey"]]
+          .filter(([en, , k]) => en !== $("engine").value && $(k).value.trim());
+        for (const [en, v] of backups) {
+          if (id !== runId) return;
+          status(`Voice failed (${e.message}), trying ${en}…`);
+          try { url = await speak(parts[k], en, v); break; } catch (e2) { e = e2; }
+        }
+        if (url === undefined) { if (id === runId) status("Voice failed: " + e.message); return; }
+      }
       if (k + 1 < parts.length) speak(parts[k + 1]).catch(() => {});
       if (id !== runId) return;
       if (!url) { status(`Skipped a non-Sanskrit part (add a Gemini or OpenRouter key to hear it).`); continue; }
