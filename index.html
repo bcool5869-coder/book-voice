@@ -46,7 +46,12 @@ details summary{cursor:pointer;color:var(--mute)}
 
   <div class="card">
     <div class="row">
-      <div><label for="key">Gemini API key (for the voice; saved only in this browser)</label><input id="key" type="password" placeholder="AIza..."></div>
+      <div><label for="key">Gemini API key (saved only in this browser)</label><input id="key" type="password" placeholder="AIza..."></div>
+      <div><label for="engine">Voice engine</label><select id="engine">
+        <option value="gemini">Gemini TTS (Gemini key)</option>
+        <option value="openai/gpt-audio">GPT Audio (OpenRouter key)</option>
+        <option value="openai/gpt-audio-mini">GPT Audio Mini, cheapest (OpenRouter key)</option>
+      </select></div>
       <div><label for="voice">Voice</label><select id="voice"></select></div>
       <div><label for="speed">Speed</label><select id="speed"><option>0.8</option><option>0.9</option><option selected>1</option><option>1.1</option><option>1.25</option></select></div>
     </div>
@@ -110,8 +115,12 @@ Rules:
 const STYLE = "Calm, clear audiobook narration at a steady pace. Pronounce Sanskrit shlokas in proper Sanskrit, slowly and rhythmically, fully voicing visarga and anusvara; read Hindi in natural standard Hindi and English in Indian English.";
 
 const store = (k, v) => { try { v === undefined ? v = localStorage.getItem(k) : localStorage.setItem(k, v) } catch {} return v };
-for (const id of ["key","voice","speed","ocrModel","ttsModel","orKey","orModel"]) {
-  if (id === "voice") $("voice").innerHTML = VOICES.map(v => `<option>${v}</option>`).join("");
+const OR_VOICES = ["marin","cedar","coral","sage","shimmer","alloy","ash","ballad","echo","verse"];
+const OR_TTS_PROMPT = "You are a text-to-speech reader, not a chat assistant. Speak the user's message aloud EXACTLY as written, word for word, in its original languages. Never add, skip, translate, explain, greet or reply. " + STYLE;
+const fillVoices = () => $("voice").innerHTML = ($("engine").value === "gemini" ? VOICES : OR_VOICES).map(v => `<option>${v}</option>`).join("");
+$("engine").addEventListener("change", () => { fillVoices(); store("bv_voice", $("voice").value); });
+for (const id of ["key","engine","voice","speed","ocrModel","ttsModel","orKey","orModel"]) {
+  if (id === "voice") fillVoices();
   const saved = store("bv_" + id); if (saved) $(id).value = saved;
   $(id).addEventListener("change", () => store("bv_" + id, $(id).value));
 }
@@ -222,7 +231,7 @@ function findAudio(o) {
 }
 
 function toWavUrl(data) {
-  const bytes = Uint8Array.from(atob(data), c => c.charCodeAt(0));
+  const bytes = typeof data === "string" ? Uint8Array.from(atob(data), c => c.charCodeAt(0)) : data;
   if (String.fromCharCode(...bytes.slice(0, 4)) === "RIFF") return URL.createObjectURL(new Blob([bytes], { type: "audio/wav" }));
   // raw 24 kHz mono 16-bit PCM: add a WAV header
   const h = new DataView(new ArrayBuffer(44)), w = (o, s) => [...s].forEach((c, i) => h.setUint8(o + i, c.charCodeAt(0)));
@@ -232,8 +241,35 @@ function toWavUrl(data) {
   return URL.createObjectURL(new Blob([h, bytes], { type: "audio/wav" }));
 }
 
+// OpenRouter audio only comes as a stream: collect the base64 pcm16 (24 kHz mono) chunks
+// ponytail: no busy-retry here (unlike call()); add one if OpenRouter voice errors show up often
+async function orSpeak(text) {
+  const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + $("orKey").value.trim() },
+    body: JSON.stringify({ model: $("engine").value, modalities: ["text", "audio"], audio: { voice: $("voice").value, format: "pcm16" }, stream: true,
+      messages: [{ role: "system", content: OR_TTS_PROMPT }, { role: "user", content: text }] })
+  });
+  if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.error?.message || ("HTTP " + r.status)); }
+  const reader = r.body.getReader(), dec = new TextDecoder(), parts = []; let buf = "";
+  for (;;) {
+    const { done, value } = await reader.read(); if (done) break;
+    const lines = (buf += dec.decode(value, { stream: true })).split("\n"); buf = lines.pop();
+    for (const l of lines) {
+      if (!l.startsWith("data:") || l.includes("[DONE]")) continue;
+      let j; try { j = JSON.parse(l.slice(5)); } catch { continue; }
+      if (j.error) throw new Error(j.error.message || "OpenRouter error");
+      const a = j.choices?.[0]?.delta?.audio?.data; if (a) parts.push(Uint8Array.from(atob(a), c => c.charCodeAt(0)));
+    }
+  }
+  if (!parts.length) throw new Error("No audio in reply");
+  const all = new Uint8Array(parts.reduce((n, p) => n + p.length, 0)); let o = 0;
+  for (const p of parts) { all.set(p, o); o += p.length; }
+  return toWavUrl(all);
+}
+
 function speak(text) {
-  const key = $("voice").value + "|" + text;
+  const key = $("engine").value + "|" + $("voice").value + "|" + text;
+  if ($("engine").value !== "gemini") return audioCache[key] ??= orSpeak(text).catch(e => { delete audioCache[key]; throw e; });
   return audioCache[key] ??= call(`${API}/interactions`, {
     model: $("ttsModel").value.trim(),
     input: [{ type: "user_input", content: [{ type: "text", text, annotations: [{ type: "speech_metadata", style: STYLE }] }] }],
@@ -255,7 +291,8 @@ async function show() {
 }
 
 async function readFrom(i) {
-  if (!$("key").value.trim()) { status("Paste your Gemini API key first."); $("key").focus(); return; }
+  const need = $("engine").value === "gemini" ? "key" : "orKey";
+  if (!$(need).value.trim()) { status(need === "key" ? "Paste your Gemini API key first." : "Paste your OpenRouter key first."); $(need).focus(); return; }
   const id = ++runId;
   while (i < pages.length && id === runId) {
     cur = i; await show();
