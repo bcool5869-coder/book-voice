@@ -13,7 +13,7 @@
 :root[data-theme="dark"]{--bg:#161412;--card:#201d1a;--ink:#efe9df;--mute:#a39b8f;--line:#38322c;--acc:#e07a4a;--acc-ink:#161412}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 Inter,"Noto Sans Devanagari",system-ui,sans-serif}
-main{max-width:860px;margin:0 auto;padding:24px 16px 120px}
+main{max-width:860px;margin:0 auto;padding:24px 16px 190px}
 h1{font-size:1.6rem;margin:0 0 4px}
 p.sub{color:var(--mute);margin:0 0 20px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:16px}
@@ -33,6 +33,9 @@ button:disabled{opacity:.45;cursor:default}
 .bar .in{max-width:860px;margin:0 auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 #pageLbl{min-width:90px;text-align:center;font-weight:600}
 #thumb{max-width:100%;border-radius:10px;border:1px solid var(--line);display:none;margin-bottom:12px}
+@media (max-width:520px){.bar .in{flex-wrap:nowrap;gap:6px}.bar button{flex:1;padding:9px 4px;font-size:.9rem;white-space:nowrap}#pageLbl{min-width:44px}.bar label{font-size:.85rem;white-space:nowrap}}
+#reader{display:none;max-height:40vh;overflow:auto;margin-bottom:12px;padding:12px;border-radius:10px;background:var(--bg);font-family:"Noto Sans Devanagari",Inter,sans-serif;font-size:1.15rem;line-height:2}
+#reader .w.on{background:var(--acc);color:var(--acc-ink);border-radius:4px;padding:0 2px}
 details summary{cursor:pointer;color:var(--mute)}
 </style>
 </head>
@@ -62,6 +65,7 @@ details summary{cursor:pointer;color:var(--mute)}
 
   <div class="card">
     <img id="thumb" alt="Current page">
+    <div id="reader"></div>
     <label for="text">Page text (you can fix mistakes before it speaks)</label>
     <textarea id="text" placeholder="Page text will appear here…"></textarea>
     <div id="status" aria-live="polite"></div>
@@ -72,9 +76,14 @@ details summary{cursor:pointer;color:var(--mute)}
   <button class="ghost" id="prev" aria-label="Previous page">◀</button>
   <span id="pageLbl">–</span>
   <button class="ghost" id="next" aria-label="Next page">▶</button>
-  <button id="play">▶ Read page</button>
+  <button class="ghost" id="scan">🔍 Scan</button>
+  <label style="display:flex;gap:6px;align-items:center;margin:0"><input type="checkbox" id="auto" checked> Auto next</label>
+</div><div class="in" style="margin-top:8px">
+  <button class="ghost" id="back" aria-label="Back 5 seconds">⏪ 5s</button>
+  <button id="play">▶ Read</button>
+  <button class="ghost" id="pause">⏸ Pause</button>
   <button class="ghost" id="stop">■ Stop</button>
-  <label style="display:flex;gap:6px;align-items:center;margin:0"><input type="checkbox" id="auto" checked> Auto next page</label>
+  <button class="ghost" id="fwd" aria-label="Forward 5 seconds">5s ⏩</button>
 </div></div>
 
 <script>
@@ -240,7 +249,8 @@ async function readFrom(i) {
       if (k + 1 < parts.length) speak(parts[k + 1]).catch(() => {});
       if (id !== runId) return;
       await new Promise(res => {
-        playing = new Audio(url); playing.playbackRate = +$("speed").value;
+        playing = new Audio(url); playing.playbackRate = +$("speed").value; $("pause").textContent = "⏸ Pause";
+        karaoke(parts[k], playing);
         playing.onended = playing.onerror = res; playing.play().catch(res);
       });
     }
@@ -251,7 +261,33 @@ async function readFrom(i) {
   }
 }
 
-function stop() { runId++; if (playing) { playing.pause(); playing = null; } status("Stopped."); }
+function stop() { runId++; if (playing) { playing.pause(); playing = null; } $("reader").style.display = "none"; status("Stopped."); }
+
+// Highlights the word being spoken. Gemini TTS gives no word timings, so this is an estimate:
+// position in the audio ≈ position in the text, weighted by word length.
+// ponytail: drifts a little around long pauses (। ॥, line breaks); real timings would need a TTS with word timestamps
+function karaoke(text, audio) {
+  const box = $("reader"), spans = [], ends = []; let total = 0;
+  box.textContent = "";
+  for (const w of text.split(/(\s+)/)) {
+    if (!w) continue;
+    if (/^\s+$/.test(w)) { box.append(w.includes("\n") ? document.createElement("br") : " "); continue; }
+    const s = Object.assign(document.createElement("span"), { textContent: w, className: "w" });
+    box.append(s); spans.push(s); ends.push(total += w.length + 1);
+  }
+  box.style.display = "block";
+  let last = -1;
+  const tick = () => {
+    if (playing !== audio) return;
+    if (audio.duration && spans.length) {
+      const pos = audio.currentTime / audio.duration * total;
+      let i = ends.findIndex(e => e > pos); if (i < 0) i = spans.length - 1;
+      if (i !== last) { spans[last]?.classList.remove("on"); spans[i].classList.add("on"); spans[i].scrollIntoView({ block: "nearest" }); last = i; }
+    }
+    requestAnimationFrame(tick);
+  };
+  tick();
+}
 
 $("drop").onclick = () => $("file").click();
 $("drop").onkeydown = e => (e.key === "Enter" || e.key === " ") && $("file").click();
@@ -263,6 +299,21 @@ $("prev").onclick = () => { stop(); cur--; show(); };
 $("next").onclick = () => { stop(); cur++; show(); };
 $("play").onclick = () => { if (!pages.length) { const t = $("text").value.trim(); if (!t) return status("Upload a file or type some text."); pages = [{ get: async () => ({ text: t }) }]; cur = 0; } readFrom(cur); };
 $("stop").onclick = stop;
+$("scan").onclick = async () => {
+  if (!pages.length) return status("Upload a file first.");
+  if (!$("key").value.trim()) { status("Paste your Gemini API key first."); $("key").focus(); return; }
+  const i = cur; status(`Scanning page ${i + 1}…`);
+  try { const t = await pageText(i); if (i === cur) $("text").value = t; status(`Page ${i + 1} scanned. Press Read to listen.`); }
+  catch (e) { status("Page reading failed: " + e.message); }
+};
+$("pause").onclick = () => {
+  if (!playing) return;
+  if (playing.paused) { playing.play(); $("pause").textContent = "⏸ Pause"; status("Playing…"); }
+  else { playing.pause(); $("pause").textContent = "▶ Resume"; status("Paused."); }
+};
+// ponytail: skips only within the current ~900-char audio part; can't jump back into the previous part
+$("back").onclick = () => playing && (playing.currentTime = Math.max(0, playing.currentTime - 5));
+$("fwd").onclick = () => playing && (playing.currentTime = Math.min(playing.duration - 0.1, playing.currentTime + 5));
 $("speed").addEventListener("change", () => playing && (playing.playbackRate = +$("speed").value));
 $("text").addEventListener("input", () => { textCache[cur] = Promise.resolve($("text").value); });
 </script>
