@@ -189,8 +189,8 @@ async function pageText(i) {
     if (p.text !== undefined) return p.text;
     const orKey = $("orKey").value.trim();
     if (orKey) {
-      // OpenRouter: chosen model first, then the free one as a backup
-      const models = [...new Set([$("orModel").value, "google/gemma-4-31b-it:free"])];
+      // OpenRouter: chosen model first, then two free Google models as backups (free servers often time out)
+      const models = [...new Set([$("orModel").value, "google/gemma-4-31b-it:free", "google/gemma-4-26b-a4b-it:free"])];
       const body = { messages: [{ role: "user", content: [
         { type: "image_url", image_url: { url: `data:${p.mime};base64,${await b64(p.image)}` } },
         { type: "text", text: OCR_PROMPT }] }] };
