@@ -46,7 +46,7 @@ details summary{cursor:pointer;color:var(--mute)}
 
   <div class="card">
     <div class="row">
-      <div><label for="key">Gemini API key (saved only in this browser)</label><input id="key" type="password" placeholder="AIza..."></div>
+      <div><label for="key">Gemini API key (saved only in this browser)</label><div style="display:flex;gap:6px"><input id="key" type="password" autocomplete="new-password" placeholder="AIza..."><button class="ghost" data-forget="key" aria-label="Forget Gemini key">✕</button></div></div>
       <div><label for="engine">Voice engine</label><select id="engine">
         <option value="gemini">Gemini TTS (Gemini key)</option>
         <option value="openai/gpt-audio">GPT Audio (OpenRouter key)</option>
@@ -58,7 +58,7 @@ details summary{cursor:pointer;color:var(--mute)}
       <div><label for="speed">Speed</label><select id="speed"><option>0.8</option><option>0.9</option><option selected>1</option><option>1.1</option><option>1.25</option></select></div>
     </div>
     <div class="row" style="margin-top:10px">
-      <div><label for="orKey">OpenRouter key (optional, used for scanning pages)</label><input id="orKey" type="password" placeholder="sk-or-..."></div>
+      <div><label for="orKey">OpenRouter key (optional, used for scanning pages)</label><div style="display:flex;gap:6px"><input id="orKey" type="password" autocomplete="new-password" placeholder="sk-or-..."><button class="ghost" data-forget="orKey" aria-label="Forget OpenRouter key">✕</button></div></div>
       <div><label for="orModel">OpenRouter scan model</label><select id="orModel">
         <option value="google/gemma-4-31b-it:free">Gemma 4 31B by Google (free)</option>
         <option value="google/gemini-3.8-flash">Gemini 3.8 Flash (best, uses credit)</option>
@@ -128,7 +128,11 @@ for (const id of ["key","engine","voice","speed","ocrModel","ttsModel","orKey","
   if (id === "voice") fillVoices();
   const saved = store("bv_" + id); if (saved) $(id).value = saved;
   $(id).addEventListener("change", () => store("bv_" + id, $(id).value));
+  $(id).addEventListener("input", () => store("bv_" + id, $(id).value));
 }
+for (const b of document.querySelectorAll("[data-forget]")) b.onclick = () => {
+  const id = b.dataset.forget; $(id).value = ""; store("bv_" + id, ""); status("Key removed from this browser.");
+};
 
 // pages: [{kind:"pdf"|"img"|"text", get: async()=>{image?, mime?, text?}}]
 let pages = [], cur = 0, textCache = {}, audioCache = {}, playing = null, runId = 0;
