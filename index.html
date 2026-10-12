@@ -46,9 +46,16 @@ details summary{cursor:pointer;color:var(--mute)}
 
   <div class="card">
     <div class="row">
-      <div><label for="key">Gemini API key (saved only in this browser)</label><input id="key" type="password" placeholder="AIza..."></div>
+      <div><label for="key">Gemini API key (for the voice; saved only in this browser)</label><input id="key" type="password" placeholder="AIza..."></div>
       <div><label for="voice">Voice</label><select id="voice"></select></div>
       <div><label for="speed">Speed</label><select id="speed"><option>0.8</option><option>0.9</option><option selected>1</option><option>1.1</option><option>1.25</option></select></div>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <div><label for="orKey">OpenRouter key (optional, used for scanning pages)</label><input id="orKey" type="password" placeholder="sk-or-..."></div>
+      <div><label for="orModel">OpenRouter scan model</label><select id="orModel">
+        <option value="google/gemini-3.8-flash">Gemini 3.8 Flash (best, uses credit)</option>
+        <option value="google/gemma-4-31b-it:free">Gemma 4 31B (free)</option>
+      </select></div>
     </div>
     <details style="margin-top:10px"><summary>Models (advanced)</summary>
       <div class="row" style="margin-top:8px">
@@ -103,7 +110,7 @@ Rules:
 const STYLE = "Calm, clear audiobook narration at a steady pace. Pronounce Sanskrit shlokas in proper Sanskrit, slowly and rhythmically, fully voicing visarga and anusvara; read Hindi in natural standard Hindi and English in Indian English.";
 
 const store = (k, v) => { try { v === undefined ? v = localStorage.getItem(k) : localStorage.setItem(k, v) } catch {} return v };
-for (const id of ["key","voice","speed","ocrModel","ttsModel"]) {
+for (const id of ["key","voice","speed","ocrModel","ttsModel","orKey","orModel"]) {
   if (id === "voice") $("voice").innerHTML = VOICES.map(v => `<option>${v}</option>`).join("");
   const saved = store("bv_" + id); if (saved) $(id).value = saved;
   $(id).addEventListener("change", () => store("bv_" + id, $(id).value));
@@ -114,15 +121,15 @@ let pages = [], cur = 0, textCache = {}, audioCache = {}, playing = null, runId 
 const status = s => $("status").textContent = s;
 
 // retries busy/overloaded errors (429, 5xx) with growing waits: 3s, 8s, 15s
-async function call(url, body) {
+async function call(url, body, auth = { "x-goog-api-key": $("key").value.trim() }) {
   for (let attempt = 0; ; attempt++) {
-    const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", "x-goog-api-key": $("key").value.trim() }, body: JSON.stringify(body) });
+    const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", ...auth }, body: JSON.stringify(body) });
     const j = await r.json().catch(() => ({}));
     if (r.ok) return j;
     const err = new Error((Array.isArray(j) ? j[0] : j)?.error?.message || ("HTTP " + r.status));
     if (!(r.status === 429 || r.status >= 500) || attempt >= 3) throw err;
     const wait = [3, 8, 15][attempt];
-    status(`Google is busy, retrying in ${wait}s…`);
+    status(`Server is busy, retrying in ${wait}s…`);
     await new Promise(res => setTimeout(res, wait * 1000));
   }
 }
@@ -162,7 +169,24 @@ async function pageText(i) {
   return textCache[i] = (async () => {
     const p = await pages[i].get();
     if (p.text !== undefined) return p.text;
-    const body = { contents: [{ parts: [{ inline_data: { mime_type: p.mime, data: await b64(p.image) } }, { text: OCR_PROMPT }] }] };
+    const orKey = $("orKey").value.trim();
+    if (orKey) {
+      // OpenRouter: chosen model first, then the free one as a backup
+      const models = [...new Set([$("orModel").value, "google/gemma-4-31b-it:free"])];
+      const body = { messages: [{ role: "user", content: [
+        { type: "image_url", image_url: { url: `data:${p.mime};base64,${await b64(p.image)}` } },
+        { type: "text", text: OCR_PROMPT }] }] };
+      for (const [n, m] of models.entries()) {
+        try {
+          const j = await call("https://openrouter.ai/api/v1/chat/completions", { ...body, model: m }, { Authorization: "Bearer " + orKey });
+          return (j.choices?.[0]?.message?.content || "").trim();
+        } catch (e) {
+          if (n === models.length - 1) throw e;
+          status(`${m} failed, trying ${models[n + 1]}…`);
+        }
+      }
+    }
+    const body ={ contents: [{ parts: [{ inline_data: { mime_type: p.mime, data: await b64(p.image) } }, { text: OCR_PROMPT }] }] };
     // if the chosen model stays overloaded, fall back to older Flash models
     const models = [...new Set([$("ocrModel").value.trim(), "gemini-3.6-flash", "gemini-3.5-flash-lite"])];
     for (const [n, m] of models.entries()) {
@@ -301,7 +325,7 @@ $("play").onclick = () => { if (!pages.length) { const t = $("text").value.trim(
 $("stop").onclick = stop;
 $("scan").onclick = async () => {
   if (!pages.length) return status("Upload a file first.");
-  if (!$("key").value.trim()) { status("Paste your Gemini API key first."); $("key").focus(); return; }
+  if (!$("key").value.trim() && !$("orKey").value.trim()) { status("Paste a Gemini or OpenRouter key first."); $("key").focus(); return; }
   const i = cur; status(`Scanning page ${i + 1}…`);
   try { const t = await pageText(i); if (i === cur) $("text").value = t; status(`Page ${i + 1} scanned. Press Read to listen.`); }
   catch (e) { status("Page reading failed: " + e.message); }
