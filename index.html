@@ -297,6 +297,7 @@ async function show() {
 
 async function readFrom(i) {
   if (!$("orKey").value.trim() && !$("key").value.trim()) { status("Paste your OpenRouter and Gemini keys first."); $("orKey").focus(); return; }
+  stop(); // only one reading at a time: silence anything already playing
   const id = ++runId;
   while (i < pages.length && id === runId) {
     cur = i; await show();
