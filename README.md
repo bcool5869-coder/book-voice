@@ -4,6 +4,8 @@
 
 Reads books aloud one page at a time, in English, Hindi and Sanskrit.
 
-1. Get a free Gemini API key at https://aistudio.google.com/apikey
-2. Paste it into the site (it is saved only in your own browser, never in this repo)
-3. Upload a PDF, page photos, or a .txt file and press **Read page**
+- **Scan:** Claude Haiku 5.5 via OpenRouter (key from https://openrouter.ai/keys)
+- **Voice:** Gemini TTS (free daily limit, key from https://aistudio.google.com/apikey)
+- **Backup voice:** GPT Audio Mini via OpenRouter, used when Gemini fails
+
+Keys are saved only in your own browser, never in this repo.
