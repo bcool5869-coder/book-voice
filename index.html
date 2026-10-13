@@ -66,6 +66,7 @@ details summary{cursor:pointer;color:var(--mute)}
         <option value="dots-studio/dots-3-note-preview:free">Dots3-Note (free)</option>
         <option value="thinkingmachines/inkling-small:free">Inkling Small (free)</option>
         <option value="nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free">Nemotron 3 Nano Omni by NVIDIA (free)</option>
+        <option value="anthropic/claude-haiku-5.5">Claude Haiku 5.5 (reliable, ~₹0.05 per page)</option>
         <option value="google/gemini-3.8-flash">Gemini 3.8 Flash (best, uses credit)</option>
       </select></div>
     </div>
@@ -204,7 +205,7 @@ async function pageText(i) {
     const orKey = $("orKey").value.trim();
     if (orKey) {
       // OpenRouter: chosen model first, then two free Google models as backups (free servers often time out)
-      const models = [...new Set([$("orModel").value, ...[...$("orModel").options].map(o => o.value).filter(v => v.endsWith(":free"))])];
+      const models = [...new Set([$("orModel").value, ...[...$("orModel").options].map(o => o.value).filter(v => v.endsWith(":free")), "anthropic/claude-haiku-5.5"])]; // paid Haiku last: free servers are often busy
       const body = { messages: [{ role: "user", content: [
         { type: "image_url", image_url: { url: `data:${p.mime};base64,${await b64(p.image)}` } },
         { type: "text", text: OCR_PROMPT }] }] };
