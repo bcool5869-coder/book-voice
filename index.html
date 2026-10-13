@@ -28,7 +28,7 @@ button.ghost{background:transparent;color:var(--ink);border:1px solid var(--line
 button:disabled{opacity:.45;cursor:default}
 .drop{border:2px dashed var(--line);border-radius:14px;padding:28px;text-align:center;color:var(--mute);cursor:pointer}
 .drop.on{border-color:var(--acc)}
-#status{color:var(--mute);font-size:.9rem;min-height:1.4em}
+#status{color:var(--mute);font-size:.85rem;min-height:1.4em;max-width:860px;margin:0 auto 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .bar{position:fixed;left:0;right:0;bottom:0;background:var(--card);border-top:1px solid var(--line);padding:10px 16px}
 .bar .in{max-width:860px;margin:0 auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 #pageLbl{min-width:90px;text-align:center;font-weight:600}
@@ -87,11 +87,10 @@ details summary{cursor:pointer;color:var(--mute)}
     <div id="reader"></div>
     <label for="text">Page text (you can fix mistakes before it speaks)</label>
     <textarea id="text" placeholder="Page text will appear here…"></textarea>
-    <div id="status" aria-live="polite"></div>
   </div>
 </main>
 
-<div class="bar"><div class="in">
+<div class="bar"><div id="status" aria-live="polite"></div><div class="in">
   <button class="ghost" id="prev" aria-label="Previous page">◀</button>
   <span id="pageLbl">–</span>
   <button class="ghost" id="next" aria-label="Next page">▶</button>
@@ -319,11 +318,12 @@ function partsFor(text) {
   if (engine === "parler") return chunks(text, 200);
   if (engine !== "vagdhenu") return chunks(text);
   const out = []; let buf = "", sa = null;
+  text = text.replace(/[।|]\s*[।|]/g, "॥"); // scans often give "।।" (or "||") instead of "॥"
   for (const line of text.split("\n").filter(l => l.trim())) {
     const s = isSanskrit(line);
     if (buf && s !== sa) { out.push(...(sa ? [buf] : chunks(buf))); buf = ""; }
     buf += (buf ? "\n" : "") + line; sa = s;
-    if (s && line.includes("॥")) { out.push(buf); buf = ""; }
+    if (s && (line.includes("॥") || buf.split("\n").length >= 2)) { out.push(buf); buf = ""; } // one verse (≈2 lines) per part
   }
   if (buf) out.push(...(sa ? [buf] : chunks(buf)));
   return out;
