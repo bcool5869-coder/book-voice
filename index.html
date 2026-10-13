@@ -146,7 +146,7 @@ const status = s => $("status").textContent = s;
 // retries busy/overloaded errors (429, 5xx) with growing waits: 3s, 8s, 15s
 async function call(url, body, auth = { "x-goog-api-key": $("key").value.trim() }, retries = 3) {
   for (let attempt = 0; ; attempt++) {
-    const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", ...auth }, body: JSON.stringify(body) });
+    const r = await waitFor(fetch(url, { method: "POST", headers: { "Content-Type": "application/json", ...auth }, body: JSON.stringify(body), signal: AbortSignal.timeout(120000) }));
     const j = await r.json().catch(() => ({}));
     if (r.ok) return j;
     const err = new Error((Array.isArray(j) ? j[0] : j)?.error?.message || ("HTTP " + r.status));
@@ -155,6 +155,16 @@ async function call(url, body, auth = { "x-goog-api-key": $("key").value.trim() 
     status(`Server is busy, retrying in ${wait}s…`);
     await new Promise(res => setTimeout(res, wait * 1000));
   }
+}
+
+// Shows a seconds counter on the status line while a request runs, so a slow server doesn't look frozen.
+// Requests give up after 120 s (AbortSignal.timeout) so the next backup model gets its turn.
+async function waitFor(promise) {
+  const base = $("status").textContent.replace(/ \(\d+s\)$/, ""), t0 = Date.now();
+  const tick = setInterval(() => { if ($("status").textContent.startsWith(base)) status(`${base} (${Math.round((Date.now() - t0) / 1000)}s)`); }, 1000);
+  try { return await promise; }
+  catch (e) { throw e.name === "TimeoutError" ? new Error("no answer after 2 minutes") : e; }
+  finally { clearInterval(tick); }
 }
 
 const b64 = blob => new Promise(res => { const fr = new FileReader(); fr.onload = () => res(fr.result.split(",")[1]); fr.readAsDataURL(blob); });
@@ -259,11 +269,11 @@ function toWavUrl(data, rate = 24000) {
 // OpenRouter audio only comes as a stream: collect the base64 pcm16 (24 kHz mono) chunks
 // ponytail: no busy-retry here (unlike call()); add one if OpenRouter voice errors show up often
 async function orSpeak(text, model, voice) {
-  const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+  const r = await waitFor(fetch("https://openrouter.ai/api/v1/chat/completions", { signal: AbortSignal.timeout(120000),
     method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + $("orKey").value.trim() },
     body: JSON.stringify({ model, modalities: ["text", "audio"], audio: { voice, format: "pcm16" }, stream: true,
       messages: [{ role: "system", content: OR_TTS_PROMPT }, { role: "user", content: text }] })
-  });
+  }));
   if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.error?.message || ("HTTP " + r.status)); }
   const reader = r.body.getReader(), dec = new TextDecoder(), parts = []; let buf = "";
   for (;;) {
