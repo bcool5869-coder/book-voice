@@ -107,6 +107,26 @@ for (const id of ["key","voice","speed","orKey"]) {
   $(id).addEventListener("change", () => store("bv_" + id, $(id).value));
   $(id).addEventListener("input", () => store("bv_" + id, $(id).value));
 }
+
+// Indian voices from Gemini's Extended Voice Library (region IN), listed first in the dropdown.
+// ponytail: assumes a library voice's `id` goes in speech_config.voice like prebuilt names (docs imply, not confirmed)
+async function loadIndianVoices() {
+  const key = $("key").value.trim(); if (!key) return;
+  try {
+    const r = await fetch(`${API}/voices?region_code=IN&page_size=200`, { headers: { "x-goog-api-key": key }, signal: AbortSignal.timeout(20000) });
+    const voices = r.ok ? (await r.json()).voices || [] : [];
+    if (!voices.length) return;
+    const esc = s => String(s ?? "").replace(/[<&"]/g, c => ({ "<": "&lt;", "&": "&amp;", '"': "&quot;" }[c]));
+    const label = v => [v.display_name || v.id, v.language_code, v.gender].filter(Boolean).join(" · ");
+    $("voice").innerHTML = `<optgroup label="Indian voices">${voices.map(v => `<option value="${esc(v.id)}">${esc(label(v))}</option>`).join("")}</optgroup>`
+      + `<optgroup label="Other voices">${VOICES.map(v => `<option>${v}</option>`).join("")}</optgroup>`;
+    const saved = store("bv_voice");
+    $("voice").value = voices.some(v => v.id === saved) ? saved : voices[0].id; // default to an Indian voice
+    store("bv_voice", $("voice").value);
+  } catch {} // keep the 30 standard voices if the library can't be reached
+}
+loadIndianVoices();
+$("key").addEventListener("change", loadIndianVoices);
 for (const b of document.querySelectorAll("[data-forget]")) b.onclick = () => {
   const id = b.dataset.forget; $(id).value = ""; store("bv_" + id, ""); status("Key removed from this browser.");
 };
