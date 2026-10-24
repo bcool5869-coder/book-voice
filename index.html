@@ -315,11 +315,12 @@ async function readFrom(i) {
       if (k + 1 < parts.length) speak(parts[k + 1]).catch(() => {});
       if (id !== runId) return;
       status(`Page ${i + 1}: reading part ${k + 1} of ${parts.length}`);
-      await new Promise(res => {
-        playing = new Audio(url); playing.playbackRate = +$("speed").value; $("pause").textContent = "⏸ Pause";
-        karaoke(parts[k], playing);
-        playing.onended = playing.onerror = res; playing.play().catch(res);
+      const blocked = await new Promise(res => {
+        playing = player; player.src = url; player.playbackRate = +$("speed").value; $("pause").textContent = "⏸ Pause";
+        karaoke(parts[k], player);
+        player.onended = player.onerror = () => res(false); player.play().catch(e => res(e.name === "NotAllowedError"));
       });
+      if (blocked) { status("Your browser blocked the sound. Tap ▶ Read again."); return; }
     }
     if (id !== runId) return;
     status(`Finished page ${i + 1}.`);
@@ -328,7 +329,7 @@ async function readFrom(i) {
   }
 }
 
-function stop() { runId++; if (playing) { playing.pause(); playing = null; } $("reader").style.display = "none"; status("Stopped."); }
+function stop() { runId++; clearInterval(karaokeTimer); if (playing) { playing.pause(); playing = null; } $("reader").style.display = "none"; status("Stopped."); }
 
 // Highlights the word being spoken. Gemini TTS gives no word timings, so this is an estimate:
 // position in the audio ≈ position in the text, weighted by word length.
@@ -344,8 +345,8 @@ function karaoke(text, audio) {
   }
   box.style.display = "block";
   let last = -1;
-  const tick = setInterval(() => {
-    if (playing !== audio) return clearInterval(tick);
+  clearInterval(karaokeTimer);
+  karaokeTimer = setInterval(() => {
     if (!audio.duration || !spans.length) return;
     const pos = audio.currentTime / audio.duration * total;
     let i = ends.findIndex(e => e > pos); if (i < 0) i = spans.length - 1;
@@ -365,7 +366,10 @@ $("drop").ondragleave = () => $("drop").classList.remove("on");
 $("drop").ondrop = e => { e.preventDefault(); $("drop").classList.remove("on"); loadFiles([...e.dataTransfer.files]); };
 $("prev").onclick = () => { stop(); cur--; show(); };
 $("next").onclick = () => { stop(); cur++; show(); };
-$("play").onclick = () => { if (!pages.length) { const t = $("text").value.trim(); if (!t) return status("Upload a file or type some text."); pages = [{ get: async () => ({ text: t }) }]; cur = 0; } readFrom(cur); };
+// Safari only lets sound play if it starts from a tap: unlock one shared player on the tap, reuse it for every part
+const player = new Audio(), SILENCE = toWavUrl(new Uint8Array(4800));
+let karaokeTimer;
+$("play").onclick = () => { player.src = SILENCE; player.play().catch(() => {}); if (!pages.length) { const t = $("text").value.trim(); if (!t) return status("Upload a file or type some text."); pages = [{ get: async () => ({ text: t }) }]; cur = 0; } readFrom(cur); };
 $("stop").onclick = stop;
 $("scan").onclick = async () => {
   if (!pages.length) return status("Upload a file first.");
